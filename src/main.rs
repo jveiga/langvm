@@ -1,51 +1,70 @@
 use std::fs::DirBuilder;
 
-use dirs::{home_dir};
 use clap::{App, Arg, ArgMatches, SubCommand};
+use dirs::home_dir;
 use git2::Repository;
-use log::info;
+use log::{debug, error, info};
+use thiserror::Error as TError;
 
-fn init_data_dir(force: bool) -> Result<String, failure::Error> {
-    let home = home_dir().ok_or_else(|| "Failed to find home dir".into())?;
-    let home = home.to_str().ok_or_else(|| "failed to convert home path".into())?;
-    let full_path = format!("{}/.rs-vm", home);
-    let full_path_exists = std::fs::read_dir(&full_path);
-    match (full_path_exists.is_ok(), force) {
-        (false, _) => return Err(Box::new("Invalid home dir".to_string())),
-        (true, true) =>
+const PLUGIN_REPO_URL: &'static str = "https://github.com/asdf-vm/asdf-plugins";
+
+#[derive(TError, Debug)]
+enum EError {
+    MissingHomeDir,
+    UnableToCreateDir(std::io::Error),
+}
+
+impl std::fmt::Display for EError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, ".....")
     }
-    DirBuilder::new().recursive(true).create(&full_path)?;
+}
+
+impl std::convert::From<EError> for std::io::Error {
+    fn from(e: EError) -> Self {
+        std::io::Error::new(std::io::ErrorKind::Other, e)
+    }
+}
+
+fn init_data_dir() -> Result<String, EError> {
+    let home = home_dir().ok_or(EError::MissingHomeDir)?;
+    let full_path = format!("{}/.rs-vm", home.to_string_lossy());
+    debug!("creating {}", &full_path);
+    DirBuilder::new()
+        .recursive(true)
+        .create(&full_path)
+        .map_err(EError::UnableToCreateDir)?;
 
     Ok(full_path)
 }
 
-fn setup_data_dir(dir: String) -> Result<(), Box<dyn std::error::Error>> {
-    let plugin_repo_url = "https://github.com/asdf-vm/asdf-plugins";
+fn setup_data_dir(dir: String) -> std::io::Result<()> {
     info!("cloning plugin repo");
-    Repository::clone(plugin_repo_url, dir)?;
+    Repository::clone(PLUGIN_REPO_URL, dir)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     info!("finished cloning plugin repo");
 
     Ok(())
 }
 
-fn main() {
+fn update() -> std::io::Result<()> {
+    Ok(())
+}
+
+fn main() -> Result<(), std::io::Error> {
     simple_logger::init().expect("failed to setup logger");
     let matches = App::new("rust version manager")
         .version("1.0")
-        .subcommand(
-            SubCommand::with_name("init")
-                .about("initializes data directory")
-                .arg(
-                    Arg::with_name("force")
-                        .short("f")
-                        .help("overwrites data_dir if it already exists"),
-                ),
-        )
+        .subcommand(SubCommand::with_name("init").about("initializes data directory"))
         .get_matches();
 
-    // println!("{:?}", matches);
-    if let Some(init_arg) = matches.subcommand_matches("init") {
-        let data_dir = init_data_dir(init_arg.value_of("force").is_some()).expect("failed to create data dir");
-        setup_data_dir(data_dir).expect("failed to clone plugins repo");
+    if matches.subcommand_matches("init").is_some() {
+        let data_dir = init_data_dir()?;
+        setup_data_dir(data_dir)?;
+    } else if matches.subcommand_matches("update").is_some() {
+        update()?;
+    } else {
+        println!("{}", matches.usage());
     }
+    Ok(())
 }
